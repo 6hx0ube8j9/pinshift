@@ -1,5 +1,7 @@
 #include "resource.h"
 
+1 24 "manifest.xml"
+
 IDI_APP_ICON    ICON "res/app.ico"
 IDI_ICON_QUAN   ICON "res/quan.ico"
 IDI_ICON_SHUANG ICON "res/shuang.ico"
