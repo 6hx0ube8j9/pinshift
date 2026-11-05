@@ -326,7 +326,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case IDM_HELP:
             TaskDialog(
                 hwnd,
-                hInstance,
+                NULL,
                 L"PinShift",
                 L"快捷操作指南",
                 L"• 切换输入模式\n"
