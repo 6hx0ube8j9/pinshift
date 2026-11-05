@@ -1,7 +1,7 @@
 CC      := gcc
 WINDRES := windres
 CFLAGS  := -O3 -s -mwindows -Wall -DUNICODE -D_UNICODE
-LIBS    := -lkernel32 -luser32 -lshell32 -ladvapi32 -lgdi32 -lcomctl32
+LIBS    := -lkernel32 -luser32 -lshell32 -ladvapi32 -lgdi32
 
 TARGET  := pinshift.exe
 SRCS    := core.c
