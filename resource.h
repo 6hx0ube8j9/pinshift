@@ -1,5 +1,7 @@
 #pragma once
 
+#define IDI_APP_ICON        1
+
 #define IDI_ICON_QUAN       101
 #define IDI_ICON_SHUANG     102
 
