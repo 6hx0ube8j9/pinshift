@@ -1,5 +1,5 @@
-CC      := gcc
-WINDRES := windres
+CC      ?= gcc
+WINDRES ?= windres
 CFLAGS  := -O3 -s -mwindows -Wall -DUNICODE -D_UNICODE
 LIBS    := -lkernel32 -luser32 -lshell32 -ladvapi32 -lgdi32
 
@@ -16,6 +16,7 @@ $(TARGET): $(OBJS)
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+core.o: resource.h
 res.o: $(RC) resource.h manifest.xml
 	$(WINDRES) -i $< -o $@
 
