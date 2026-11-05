@@ -326,9 +326,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             MessageBoxW(
                 hwnd,
                 L"【快捷操作指南】\n\n"
-                L"• 切换输入模式：        Ctrl + Shift + Y\n"
-                L"• 显隐托盘图标：        Ctrl + Shift + Win + Y\n"
-                L"• 显隐托盘图标：        Shift + 双击运行程序",
+                L"• 切换输入模式：Ctrl + Shift + Y\n"
+                L"• 显隐托盘图标：Ctrl + Shift + Win + Y\n"
+                L"• 显隐托盘图标：Shift + 双击程序",
                 L"PinShift", MB_OK | MB_ICONINFORMATION
             );
             break;
