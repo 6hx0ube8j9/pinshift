@@ -109,13 +109,34 @@ static int QueryTaskbarIconMetric(void) {
     return (int)(16 * dpi / 96);
 }
 
+static HICON LoadIconSharp(HINSTANCE hInst, int resID, int targetSize) {
+    HICON hIcon = NULL;
+    HMODULE hComCtl = LoadLibraryW(L"comctl32.dll");
+    
+    if (hComCtl) {
+        typedef HRESULT (WINAPI *PFN_LoadIconWithScaleDown)(HINSTANCE, PCWSTR, int, int, HICON*);
+        PFN_LoadIconWithScaleDown pfnScaleDown = 
+            (PFN_LoadIconWithScaleDown)GetProcAddress(hComCtl, "LoadIconWithScaleDown");
+        
+        if (pfnScaleDown) {
+            if (SUCCEEDED(pfnScaleDown(hInst, MAKEINTRESOURCEW(resID), targetSize, targetSize, &hIcon))) {
+                FreeLibrary(hComCtl);
+                return hIcon;
+            }
+        }
+        FreeLibrary(hComCtl);
+    }
+
+    return (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(resID), IMAGE_ICON, targetSize, targetSize, LR_DEFAULTCOLOR);
+}
+
 static void ReloadIconResources(int targetSize) {
     if (targetSize <= 0) targetSize = 16;
     if (s_iconSize == targetSize && s_iconQuan && s_iconShuang) return;
 
     HINSTANCE hInst = GetModuleHandleW(NULL);
-    HICON newQuan = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDI_ICON_QUAN), IMAGE_ICON, targetSize, targetSize, LR_DEFAULTCOLOR);
-    HICON newShuang = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDI_ICON_SHUANG), IMAGE_ICON, targetSize, targetSize, LR_DEFAULTCOLOR);
+    HICON newQuan = LoadIconSharp(hInst, IDI_ICON_QUAN, targetSize);
+    HICON newShuang = LoadIconSharp(hInst, IDI_ICON_SHUANG, targetSize);
 
     if (newQuan && newShuang) {
         if (s_iconQuan) DestroyIcon(s_iconQuan);
