@@ -20,8 +20,8 @@
 #define REG_PATH_INPUT      L"SOFTWARE\\Microsoft\\InputMethod\\Settings\\CHS"
 #define REG_VAL_INPUT       L"Enable Double Pinyin"
 #define REG_PATH_RUN        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-#define REG_VAL_RUN         L"PinshiftAutoStart"
-#define REG_PATH_APP        L"Software\\Pinshift"
+#define REG_VAL_RUN         L"PinShift"
+#define REG_PATH_APP        L"Software\\PinShift"
 #define REG_VAL_HIDE_TRAY   L"HideTrayIcon"
 
 // 消息与定时器 ID
@@ -39,8 +39,8 @@ static bool  s_trayVisible = false;
 static DWORD s_currentMode = 0;
 static UINT  s_msgTaskbarCreated = 0;
 
-static const wchar_t* const CLASS_NAME = L"PinshiftHotkeyWindow_Class";
-static const wchar_t* const MUTEX_NAME = L"Local\\PinshiftUniqueMutexSecure";
+static const wchar_t* const CLASS_NAME = L"PinShiftHotkeyWindow_Class";
+static const wchar_t* const MUTEX_NAME = L"Local\\PinShiftUniqueMutexSecure";
 
 // --- 前置函数原型 ---
 static void UpdateTrayIcon(void);
@@ -170,7 +170,7 @@ static void UpdateTrayIcon(void) {
     nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid.uCallbackMessage = WM_TRAYICON;
     nid.hIcon = (s_currentMode == 1) ? s_iconShuang : s_iconQuan;
-    wcscpy_s(nid.szTip, 128, (s_currentMode == 1) ? L"Pinshift: 双拼模式" : L"Pinshift: 全拼模式");
+    wcscpy_s(nid.szTip, 128, (s_currentMode == 1) ? L"PinShift: 双拼模式" : L"PinShift: 全拼模式");
 
     if (!Shell_NotifyIconW(NIM_MODIFY, &nid)) {
         Shell_NotifyIconW(NIM_ADD, &nid);
@@ -335,7 +335,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 L"Shift+Ctrl+Y：切换全拼/双拼\n"
                 L"Shift+Ctrl+Win+Y：显示/隐藏托盘图标\n"
                 L"Shift+双击程序：显示/隐藏托盘图标",
-                L"Pinshift", MB_OK | MB_ICONINFORMATION
+                L"PinShift", MB_OK | MB_ICONINFORMATION
             );
             break;
         case IDM_EXIT:
@@ -404,7 +404,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                                   GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
     RegisterClassExW(&wc);
 
-    s_hwnd = CreateWindowExW(0, CLASS_NAME, L"Pinshift", 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
+    s_hwnd = CreateWindowExW(0, CLASS_NAME, L"PinShift", 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
     if (!s_hwnd) {
         CloseHandle(hMutex);
         return 0;
