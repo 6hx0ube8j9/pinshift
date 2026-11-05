@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include "resource.h"
 
+// 补全高分屏与热键兼容宏
 #ifndef MOD_NOREPEAT
 #define MOD_NOREPEAT 0x4000
 #endif
@@ -15,6 +16,7 @@
 #endif
 #define REG_NOTIFY_THREAD_AGNOSTIC 0x10000000
 
+// 注册表配置路径
 #define REG_PATH_INPUT      L"SOFTWARE\\Microsoft\\InputMethod\\Settings\\CHS"
 #define REG_VAL_INPUT       L"Enable Double Pinyin"
 #define REG_PATH_RUN        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
@@ -22,12 +24,13 @@
 #define REG_PATH_APP        L"Software\\Pinshift"
 #define REG_VAL_HIDE_TRAY   L"HideTrayIcon"
 
+// 消息与定时器 ID
 #define WM_TRAYICON         (WM_USER + 1)
 #define HOTKEY_TOGGLE_MODE  1
 #define HOTKEY_TOGGLE_HIDE  2
-
 #define TIMER_DPI_SETTLE_ID 1
 
+// 全局静态状态（单线程驱动）
 static HWND  s_hwnd = NULL;
 static HICON s_iconQuan = NULL;
 static HICON s_iconShuang = NULL;
@@ -39,6 +42,10 @@ static UINT  s_msgTaskbarCreated = 0;
 static const wchar_t* const CLASS_NAME = L"PinshiftHotkeyWindow_Class";
 static const wchar_t* const MUTEX_NAME = L"Local\\PinshiftUniqueMutexSecure";
 
+// --- 前置函数原型 ---
+static void UpdateTrayIcon(void);
+
+// --- 输入法状态管理 ---
 static DWORD GetIMEMode(void) {
     HKEY hKey;
     DWORD mode = 0;
@@ -62,8 +69,6 @@ static void NotifyActiveWindowIME(void) {
     }
 }
 
-static void UpdateTrayIcon(void);
-
 static void SetIMEMode(DWORD mode) {
     if (s_currentMode == mode) return;
 
@@ -82,6 +87,7 @@ static void ToggleIMEMode(void) {
     SetIMEMode((s_currentMode == 1) ? 0 : 1);
 }
 
+// --- 高分屏适配与高清图标加载 ---
 static int QueryTaskbarIconMetric(void) {
     HWND hTray = FindWindowW(L"Shell_TrayWnd", NULL);
     UINT dpi = 96;
@@ -111,15 +117,16 @@ static int QueryTaskbarIconMetric(void) {
     return (int)(16 * dpi / 96);
 }
 
+// 采用 LoadIconWithScaleDown 进行双三次抗锯齿下采样，防止 225% 等缩放下向上插值发虚
 static HICON LoadIconSharp(HINSTANCE hInst, int resID, int targetSize) {
     HICON hIcon = NULL;
     HMODULE hComCtl = LoadLibraryW(L"comctl32.dll");
-    
+
     if (hComCtl) {
         typedef HRESULT (WINAPI *PFN_LoadIconWithScaleDown)(HINSTANCE, PCWSTR, int, int, HICON*);
-        PFN_LoadIconWithScaleDown pfnScaleDown = 
+        PFN_LoadIconWithScaleDown pfnScaleDown =
             (PFN_LoadIconWithScaleDown)GetProcAddress(hComCtl, "LoadIconWithScaleDown");
-        
+
         if (pfnScaleDown) {
             if (SUCCEEDED(pfnScaleDown(hInst, MAKEINTRESOURCEW(resID), targetSize, targetSize, &hIcon))) {
                 FreeLibrary(hComCtl);
@@ -129,6 +136,7 @@ static HICON LoadIconSharp(HINSTANCE hInst, int resID, int targetSize) {
         FreeLibrary(hComCtl);
     }
 
+    // 兜底降级处理
     return (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(resID), IMAGE_ICON, targetSize, targetSize, LR_DEFAULTCOLOR);
 }
 
@@ -152,6 +160,7 @@ static void ReloadIconResources(int targetSize) {
     }
 }
 
+// --- 托盘管理 ---
 static void UpdateTrayIcon(void) {
     if (!s_trayVisible) return;
 
@@ -177,6 +186,7 @@ static void RemoveTrayIcon(void) {
     s_trayVisible = false;
 }
 
+// --- 开机自启与配置 ---
 static bool IsAutoStartEnabled(void) {
     HKEY hKey;
     bool enabled = false;
@@ -255,7 +265,9 @@ static void ShowContextMenu(void) {
     DestroyMenu(hMenu);
 }
 
+// --- 窗口消息回调 ---
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    // 任务栏崩溃重建：等待 300ms 避开 Explorer 初始化竞态
     if (msg == s_msgTaskbarCreated && s_msgTaskbarCreated != 0) {
         SetTimer(hwnd, TIMER_DPI_SETTLE_ID, 300, NULL);
         return 0;
@@ -266,12 +278,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         s_msgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
         return 0;
 
+    // 系统缩放/显示变更：启动单次 300ms 定时器防抖，等待任务栏重绘完成
     case WM_DPICHANGED:
     case WM_DISPLAYCHANGE:
     case WM_SETTINGCHANGE:
         SetTimer(hwnd, TIMER_DPI_SETTLE_ID, 300, NULL);
         return 0;
 
+    // 定时器到达：Explorer 完成布局，立即销毁定时器并刷新图标
     case WM_TIMER:
         if (wParam == TIMER_DPI_SETTLE_ID) {
             KillTimer(hwnd, TIMER_DPI_SETTLE_ID);
@@ -286,6 +300,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
         return 0;
 
+    // 原生无抖动热键响应
     case WM_HOTKEY:
         if (wParam == HOTKEY_TOGGLE_MODE) {
             ToggleIMEMode();
@@ -347,13 +362,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         PostQuitMessage(0);
         return 0;
     }
-
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+// --- 纯单线程入口与事件泵 ---
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    (void)hPrevInstance; (void)lpCmdLine; (void)nCmdShow;
+    (void)hPrevInstance;
+    (void)lpCmdLine;
+    (void)nCmdShow;
 
+    // 1. 声明现代多显示器 Per-Monitor DPI V2 感知
     HMODULE hUser = GetModuleHandleW(L"user32.dll");
     if (hUser) {
         typedef BOOL (WINAPI *SetDpiAwarenessProc)(DPI_AWARENESS_CONTEXT);
@@ -361,6 +379,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         if (setDpi) setDpi(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
 
+    // 2. 单例互斥检测与指令分发
     HANDLE hMutex = CreateMutexW(NULL, FALSE, MUTEX_NAME);
     if (!hMutex || GetLastError() == ERROR_ALREADY_EXISTS) {
         HWND oldHwnd = FindWindowW(CLASS_NAME, NULL);
@@ -375,6 +394,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return 0;
     }
 
+    // 3. 注册窗口类
     WNDCLASSEXW wc = { sizeof(WNDCLASSEXW) };
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
@@ -390,9 +410,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return 0;
     }
 
+    // 4. 注册全局热键（开启系统级 MOD_NOREPEAT 防长按连击）
     RegisterHotKey(s_hwnd, HOTKEY_TOGGLE_MODE, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'Y');
     RegisterHotKey(s_hwnd, HOTKEY_TOGGLE_HIDE, MOD_CONTROL | MOD_SHIFT | MOD_WIN | MOD_NOREPEAT, 'Y');
 
+    // 5. 创建注册表监听事件内核对象
     HKEY hRegKey = NULL;
     HANDLE hRegEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
     if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH_INPUT, 0, NULL, 0, KEY_NOTIFY | KEY_QUERY_VALUE, NULL, &hRegKey, NULL) == ERROR_SUCCESS) {
@@ -406,12 +428,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         UpdateTrayIcon();
     }
 
+    // 6. 单线程多路复用事件泵（主线程处理 GUI 消息 + 注册表内核事件，无常驻后台线程）
     MSG msg;
     bool running = true;
     while (running) {
         DWORD waitResult = MsgWaitForMultipleObjectsEx(1, &hRegEvent, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
 
         if (waitResult == WAIT_OBJECT_0) {
+            // 注册表变更唤醒：重新挂载监听
             RegNotifyChangeKeyValue(hRegKey, FALSE, REG_NOTIFY_CHANGE_LAST_SET | REG_NOTIFY_THREAD_AGNOSTIC, hRegEvent, TRUE);
             DWORD newMode = GetIMEMode();
             if (newMode != s_currentMode) {
@@ -419,6 +443,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                 UpdateTrayIcon();
             }
         } else {
+            // 派发窗口与硬件输入消息
             while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
                 if (msg.message == WM_QUIT) {
                     running = false;
@@ -430,6 +455,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
     }
 
+    // 7. 退出并回收系统句柄
     if (hRegKey) RegCloseKey(hRegKey);
     if (hRegEvent) CloseHandle(hRegEvent);
     CloseHandle(hMutex);
