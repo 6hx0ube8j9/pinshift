@@ -18,15 +18,16 @@ FILESUBTYPE     0x0L
 BEGIN
     BLOCK "StringFileInfo"
     BEGIN
+        // 0409 = en-US, 04b0 = 1200 (UTF-16LE)
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName",      "PinSwitch Project"
-            VALUE "FileDescription",  "PinSwitch Input Method Switcher"
+            VALUE "CompanyName",      "PinShift Project"
+            VALUE "FileDescription",  "PinShift Input Method Switcher"
             VALUE "FileVersion",      "1.0.0.0"
-            VALUE "InternalName",     "pinswitch"
-            VALUE "LegalCopyright",   "Copyright (c) PinSwitch Project"
-            VALUE "OriginalFilename", "pinswitch.exe"
-            VALUE "ProductName",      "PinSwitch"
+            VALUE "InternalName",     "pinshift"
+            VALUE "LegalCopyright",   "Copyright (c) PinShift Project"
+            VALUE "OriginalFilename", "pinshift.exe"
+            VALUE "ProductName",      "PinShift"
             VALUE "ProductVersion",   "1.0.0.0"
         END
     END
