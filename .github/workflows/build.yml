@@ -9,54 +9,31 @@ on:
 
 jobs:
   build:
-    name: Build (${{ matrix.arch }})
+    name: Build & Package
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - arch: x64
-            target: x86_64-w64-mingw32
-            artifact: PinShift-x64.exe
-          - arch: x86
-            target: i686-w64-mingw32
-            artifact: PinShift-x86.exe
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install MinGW Cross Compiler
+      - name: Install MinGW Cross Compiler & Zip
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64 binutils-mingw-w64
+          sudo apt-get install -y gcc-mingw-w64 binutils-mingw-w64 zip
 
-      - name: Compile Resource & Binary
+      - name: Build x64 Binary
         run: |
-          ${{ matrix.target }}-windres -i res.rc -o res.o
-          ${{ matrix.target }}-gcc -O3 -s -mwindows -DUNICODE -D_UNICODE \
-            core.c res.o -o ${{ matrix.artifact }} \
+          x86_64-w64-mingw32-windres -i res.rc -o res_x64.o
+          x86_64-w64-mingw32-gcc -O3 -s -mwindows -Wall -DUNICODE -D_UNICODE \
+            core.c res_x64.o -o PinShift-x64.exe \
             -lkernel32 -luser32 -lshell32 -ladvapi32 -lgdi32
 
-      - name: Upload Binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
-
-  package:
-    name: Package Release Archive
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download x64 Binary
-        uses: actions/download-artifact@v4
-        with:
-          name: PinShift-x64.exe
-
-      - name: Download x86 Binary
-        uses: actions/download-artifact@v4
-        with:
-          name: PinShift-x86.exe
+      - name: Build x86 Binary
+        run: |
+          i686-w64-mingw32-windres -i res.rc -o res_x86.o
+          i686-w64-mingw32-gcc -O3 -s -mwindows -Wall -DUNICODE -D_UNICODE \
+            core.c res_x86.o -o PinShift-x86.exe \
+            -lkernel32 -luser32 -lshell32 -ladvapi32 -lgdi32
 
       - name: Create Zip Archive
         run: |
@@ -65,5 +42,5 @@ jobs:
       - name: Upload Zip Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PinShift-Windows.zip
+          name: PinShift-Windows
           path: PinShift-Windows.zip
