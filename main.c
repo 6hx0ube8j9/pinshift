@@ -26,6 +26,8 @@
 #define HOTKEY_TOGGLE_MODE  1
 #define HOTKEY_TOGGLE_HIDE  2
 
+#define TIMER_DPI_SETTLE_ID 1
+
 static HWND  s_hwnd = NULL;
 static HICON s_iconQuan = NULL;
 static HICON s_iconShuang = NULL;
@@ -255,11 +257,7 @@ static void ShowContextMenu(void) {
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == s_msgTaskbarCreated && s_msgTaskbarCreated != 0) {
-        if (!IsTrayHiddenConfig()) {
-            s_trayVisible = true;
-            ReloadIconResources(QueryTaskbarIconMetric());
-            UpdateTrayIcon();
-        }
+        SetTimer(hwnd, TIMER_DPI_SETTLE_ID, 300, NULL);
         return 0;
     }
 
@@ -271,37 +269,59 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_DPICHANGED:
     case WM_DISPLAYCHANGE:
     case WM_SETTINGCHANGE:
-        if (s_trayVisible) {
-            int newSize = QueryTaskbarIconMetric();
-            if (newSize != s_iconSize) {
-                ReloadIconResources(newSize);
+        SetTimer(hwnd, TIMER_DPI_SETTLE_ID, 300, NULL);
+        return 0;
+
+    case WM_TIMER:
+        if (wParam == TIMER_DPI_SETTLE_ID) {
+            KillTimer(hwnd, TIMER_DPI_SETTLE_ID);
+            if (!IsTrayHiddenConfig()) {
+                s_trayVisible = true;
+                int newSize = QueryTaskbarIconMetric();
+                if (newSize != s_iconSize || !s_iconQuan || !s_iconShuang) {
+                    ReloadIconResources(newSize);
+                }
                 UpdateTrayIcon();
             }
         }
         return 0;
 
     case WM_HOTKEY:
-        if (wParam == HOTKEY_TOGGLE_MODE) ToggleIMEMode();
-        else if (wParam == HOTKEY_TOGGLE_HIDE) ToggleTrayVisibility();
+        if (wParam == HOTKEY_TOGGLE_MODE) {
+            ToggleIMEMode();
+        } else if (wParam == HOTKEY_TOGGLE_HIDE) {
+            ToggleTrayVisibility();
+        }
         return 0;
 
     case WM_TRAYICON:
-        if (lParam == WM_LBUTTONUP) ToggleIMEMode();
-        else if (lParam == WM_RBUTTONUP) ShowContextMenu();
+        if (lParam == WM_LBUTTONUP) {
+            ToggleIMEMode();
+        } else if (lParam == WM_RBUTTONUP) {
+            ShowContextMenu();
+        }
         return 0;
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
-        case IDM_FULL_PINYIN:   SetIMEMode(0); break;
-        case IDM_DOUBLE_PINYIN: SetIMEMode(1); break;
-        case IDM_AUTO_START:    ToggleAutoStart(); break;
+        case IDM_FULL_PINYIN:
+            SetIMEMode(0);
+            break;
+        case IDM_DOUBLE_PINYIN:
+            SetIMEMode(1);
+            break;
+        case IDM_AUTO_START:
+            ToggleAutoStart();
+            break;
         case IDM_HELP:
-            MessageBoxW(hwnd,
+            MessageBoxW(
+                hwnd,
                 L"【快捷键说明】\n\n"
                 L"Shift+Ctrl+Y：切换全拼/双拼\n"
                 L"Shift+Ctrl+Win+Y：显示/隐藏托盘图标\n"
                 L"Shift+双击程序：显示/隐藏托盘图标",
-                L"Pinshift", MB_OK | MB_ICONINFORMATION);
+                L"Pinshift", MB_OK | MB_ICONINFORMATION
+            );
             break;
         case IDM_EXIT:
             DestroyWindow(hwnd);
@@ -310,14 +330,24 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
 
     case WM_DESTROY:
+        KillTimer(hwnd, TIMER_DPI_SETTLE_ID);
         UnregisterHotKey(hwnd, HOTKEY_TOGGLE_MODE);
         UnregisterHotKey(hwnd, HOTKEY_TOGGLE_HIDE);
         RemoveTrayIcon();
-        if (s_iconQuan) DestroyIcon(s_iconQuan);
-        if (s_iconShuang) DestroyIcon(s_iconShuang);
+
+        if (s_iconQuan) {
+            DestroyIcon(s_iconQuan);
+            s_iconQuan = NULL;
+        }
+        if (s_iconShuang) {
+            DestroyIcon(s_iconShuang);
+            s_iconShuang = NULL;
+        }
+
         PostQuitMessage(0);
         return 0;
     }
+
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
