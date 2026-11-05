@@ -28,14 +28,14 @@ jobs:
           x86_64-w64-mingw32-windres -i res.rc -o res_x64.o
           x86_64-w64-mingw32-gcc -O3 -s -mwindows -Wall -DUNICODE -D_UNICODE \
             core.c res_x64.o -o PinShift-x64.exe \
-            -lkernel32 -luser32 -lshell32 -ladvapi32 -lgdi32 -lcomctl32
+            -lkernel32 -luser32 -lshell32 -ladvapi32 -lgdi32
 
       - name: Build x86 Binary
         run: |
           i686-w64-mingw32-windres -i res.rc -o res_x86.o
           i686-w64-mingw32-gcc -O3 -s -mwindows -Wall -DUNICODE -D_UNICODE \
             core.c res_x86.o -o PinShift-x86.exe \
-            -lkernel32 -luser32 -lshell32 -ladvapi32 -lgdi32 -lcomctl32
+            -lkernel32 -luser32 -lshell32 -ladvapi32 -lgdi32
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
