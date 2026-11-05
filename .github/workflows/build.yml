@@ -16,10 +16,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install MinGW Cross Compiler & Zip
+      - name: Install MinGW Cross Compiler
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64 binutils-mingw-w64 zip
+          sudo apt-get install -y gcc-mingw-w64 binutils-mingw-w64
 
       - name: Build x64 Binary
         run: |
@@ -35,12 +35,10 @@ jobs:
             core.c res_x86.o -o PinShift-x86.exe \
             -lkernel32 -luser32 -lshell32 -ladvapi32 -lgdi32
 
-      - name: Create Zip Archive
-        run: |
-          zip -9 PinShift-Windows.zip PinShift-x64.exe PinShift-x86.exe
-
-      - name: Upload Zip Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: PinShift-Windows
-          path: PinShift-Windows.zip
+          path: |
+            PinShift-x64.exe
+            PinShift-x86.exe
