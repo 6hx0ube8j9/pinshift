@@ -7,6 +7,14 @@
 #include <stdio.h>
 #include "resource.h"
 
+#ifndef MOD_NOREPEAT
+#define MOD_NOREPEAT 0x4000
+#endif
+#ifndef DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+#define DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 ((DPI_AWARENESS_CONTEXT)-4)
+#endif
+#define REG_NOTIFY_THREAD_AGNOSTIC 0x10000000
+
 #define REG_PATH_INPUT      L"SOFTWARE\\Microsoft\\InputMethod\\Settings\\CHS"
 #define REG_VAL_INPUT       L"Enable Double Pinyin"
 #define REG_PATH_RUN        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
@@ -14,33 +22,22 @@
 #define REG_PATH_APP        L"Software\\Pinshift"
 #define REG_VAL_HIDE_TRAY   L"HideTrayIcon"
 
-#define WM_TRAYICON         (WM_USER + 100)
-#define WM_USER_SYNC_UI     (WM_USER + 779)
-#define WM_USER_TOGGLE_MODE (WM_USER + 777)
-#define WM_USER_TOGGLE_HIDE (WM_USER + 778)
-
-#define TIMER_DPI_PROBE_ID  1
+#define WM_TRAYICON         (WM_USER + 1)
 #define HOTKEY_TOGGLE_MODE  1
 #define HOTKEY_TOGGLE_HIDE  2
 
-typedef struct {
-    HWND    hwnd;
-    HWND    cachedTrayHwnd;
-    HICON   hIconQuan;
-    HICON   hIconShuang;
-    int     currentIconSize;
-    bool    isTrayVisible;
-    HANDLE  hRegThread;
-    HANDLE  hStopEvent;
-    DWORD   lastToggleTick;
-    DWORD   lastToggleHideTick;
-} AppState;
+static HWND  s_hwnd = NULL;
+static HICON s_iconQuan = NULL;
+static HICON s_iconShuang = NULL;
+static int   s_iconSize = 0;
+static bool  s_trayVisible = false;
+static DWORD s_currentMode = 0;
+static UINT  s_msgTaskbarCreated = 0;
 
-static AppState g_app = {0};
-static const wchar_t* g_className = L"PinshiftHotkeyWindow_Unique_Class";
-static const wchar_t* g_mutexName = L"Local\\PinshiftUniqueMutexSecure";
+static const wchar_t* const CLASS_NAME = L"PinshiftHotkeyWindow_Class";
+static const wchar_t* const MUTEX_NAME = L"Local\\PinshiftUniqueMutexSecure";
 
-DWORD GetIMEMode(void) {
+static DWORD GetIMEMode(void) {
     HKEY hKey;
     DWORD mode = 0;
     DWORD size = sizeof(mode);
@@ -51,7 +48,7 @@ DWORD GetIMEMode(void) {
     return mode;
 }
 
-void AsyncRefreshActiveWindowIME(void) {
+static void NotifyActiveWindowIME(void) {
     HWND fg = GetForegroundWindow();
     if (fg) {
         DWORD_PTR result;
@@ -63,74 +60,40 @@ void AsyncRefreshActiveWindowIME(void) {
     }
 }
 
-void ShellNotify(DWORD action) {
-    NOTIFYICONDATAW nid = {0};
-    nid.cbSize = sizeof(NOTIFYICONDATAW);
-    nid.hWnd = g_app.hwnd;
-    nid.uID = 1;
-    nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-    nid.uCallbackMessage = WM_TRAYICON;
+static void UpdateTrayIcon(void);
 
-    DWORD mode = GetIMEMode();
-    if (mode == 1) {
-        nid.hIcon = g_app.hIconShuang;
-        wcscpy_s(nid.szTip, 128, L"Pinshift: 双拼模式");
-    } else {
-        nid.hIcon = g_app.hIconQuan;
-        wcscpy_s(nid.szTip, 128, L"Pinshift: 全拼模式");
-    }
-
-    if (!Shell_NotifyIconW(action, &nid) && action == NIM_MODIFY) {
-        Shell_NotifyIconW(NIM_ADD, &nid);
-    }
-}
-
-bool SetIMEMode(DWORD mode) {
-    if (GetIMEMode() == mode) return false;
+static void SetIMEMode(DWORD mode) {
+    if (s_currentMode == mode) return;
 
     HKEY hKey;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH_INPUT, 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
         RegSetValueExW(hKey, REG_VAL_INPUT, 0, REG_DWORD, (const BYTE*)&mode, sizeof(mode));
         RegCloseKey(hKey);
 
-        if (g_app.isTrayVisible) ShellNotify(NIM_MODIFY);
-        AsyncRefreshActiveWindowIME();
-        return true;
+        s_currentMode = mode;
+        if (s_trayVisible) UpdateTrayIcon();
+        NotifyActiveWindowIME();
     }
-    return false;
 }
 
-void ToggleIMEMode(void) {
-    DWORD now = GetTickCount();
-    if (now - g_app.lastToggleTick < 200) return;
-    g_app.lastToggleTick = now;
-
-    DWORD target = (GetIMEMode() == 1) ? 0 : 1;
-    SetIMEMode(target);
+static void ToggleIMEMode(void) {
+    SetIMEMode((s_currentMode == 1) ? 0 : 1);
 }
 
-int GetTaskbarSmallIconSize(void) {
-    UINT dpi = 0;
+static int QueryTaskbarIconMetric(void) {
+    HWND hTray = FindWindowW(L"Shell_TrayWnd", NULL);
+    UINT dpi = 96;
 
-    if (g_app.cachedTrayHwnd) {
-        typedef UINT (WINAPI *GetDpiForWindowFunc)(HWND);
-        HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
-        GetDpiForWindowFunc pGetDpi = (GetDpiForWindowFunc)GetProcAddress(hUser32, "GetDpiForWindow");
-        if (pGetDpi) dpi = pGetDpi(g_app.cachedTrayHwnd);
-        if (dpi == 0) g_app.cachedTrayHwnd = NULL;
-    }
+    typedef UINT (WINAPI *GetDpiForWindowProc)(HWND);
+    typedef int  (WINAPI *GetSystemMetricsForDpiProc)(int, UINT);
 
-    if (dpi == 0) {
-        g_app.cachedTrayHwnd = FindWindowW(L"Shell_TrayWnd", NULL);
-        if (g_app.cachedTrayHwnd) {
-            typedef UINT (WINAPI *GetDpiForWindowFunc)(HWND);
-            HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
-            GetDpiForWindowFunc pGetDpi = (GetDpiForWindowFunc)GetProcAddress(hUser32, "GetDpiForWindow");
-            if (pGetDpi) dpi = pGetDpi(g_app.cachedTrayHwnd);
-        }
-    }
+    HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
+    GetDpiForWindowProc pGetDpi = (GetDpiForWindowProc)GetProcAddress(hUser32, "GetDpiForWindow");
+    GetSystemMetricsForDpiProc pGetMetrics = (GetSystemMetricsForDpiProc)GetProcAddress(hUser32, "GetSystemMetricsForDpi");
 
-    if (dpi == 0) {
+    if (hTray && pGetDpi) {
+        dpi = pGetDpi(hTray);
+    } else {
         HDC hdc = GetDC(NULL);
         if (hdc) {
             dpi = (UINT)GetDeviceCaps(hdc, LOGPIXELSY);
@@ -139,71 +102,72 @@ int GetTaskbarSmallIconSize(void) {
     }
 
     if (dpi == 0) dpi = 96;
-
-    typedef int (WINAPI *GetSystemMetricsForDpiFunc)(int, UINT);
-    HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
-    GetSystemMetricsForDpiFunc pGetMetrics = (GetSystemMetricsForDpiFunc)GetProcAddress(hUser32, "GetSystemMetricsForDpi");
     if (pGetMetrics) {
         int sz = pGetMetrics(SM_CXSMICON, dpi);
         if (sz > 0) return sz;
     }
-
     return (int)(16 * dpi / 96);
 }
 
-HICON LoadIconScaled(int resID, int size) {
-    HICON hIco = (HICON)LoadImageW(
-        GetModuleHandleW(NULL), MAKEINTRESOURCEW(resID),
-        IMAGE_ICON, size, size, LR_DEFAULTCOLOR
-    );
-    if (!hIco) {
-        hIco = (HICON)LoadImageW(
-            GetModuleHandleW(NULL), MAKEINTRESOURCEW(resID),
-            IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_DEFAULTCOLOR
-        );
-    }
-    return hIco;
-}
-
-void ReloadIcons(int targetSize) {
+static void ReloadIconResources(int targetSize) {
     if (targetSize <= 0) targetSize = 16;
-    if (g_app.currentIconSize == targetSize && g_app.hIconQuan && g_app.hIconShuang) {
-        return;
-    }
+    if (s_iconSize == targetSize && s_iconQuan && s_iconShuang) return;
 
-    HICON newQuan = LoadIconScaled(IDI_ICON_QUAN, targetSize);
-    HICON newShuang = LoadIconScaled(IDI_ICON_SHUANG, targetSize);
+    HINSTANCE hInst = GetModuleHandleW(NULL);
+    HICON newQuan = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDI_ICON_QUAN), IMAGE_ICON, targetSize, targetSize, LR_DEFAULTCOLOR);
+    HICON newShuang = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDI_ICON_SHUANG), IMAGE_ICON, targetSize, targetSize, LR_DEFAULTCOLOR);
 
-    if (!newQuan || !newShuang) {
+    if (newQuan && newShuang) {
+        if (s_iconQuan) DestroyIcon(s_iconQuan);
+        if (s_iconShuang) DestroyIcon(s_iconShuang);
+        s_iconQuan = newQuan;
+        s_iconShuang = newShuang;
+        s_iconSize = targetSize;
+    } else {
         if (newQuan) DestroyIcon(newQuan);
         if (newShuang) DestroyIcon(newShuang);
-        return;
     }
-
-    if (g_app.hIconQuan) DestroyIcon(g_app.hIconQuan);
-    if (g_app.hIconShuang) DestroyIcon(g_app.hIconShuang);
-
-    g_app.hIconQuan = newQuan;
-    g_app.hIconShuang = newShuang;
-    g_app.currentIconSize = targetSize;
 }
 
-bool IsAutoStart(void) {
+static void UpdateTrayIcon(void) {
+    if (!s_trayVisible) return;
+
+    NOTIFYICONDATAW nid = { sizeof(NOTIFYICONDATAW) };
+    nid.hWnd = s_hwnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    nid.uCallbackMessage = WM_TRAYICON;
+    nid.hIcon = (s_currentMode == 1) ? s_iconShuang : s_iconQuan;
+    wcscpy_s(nid.szTip, 128, (s_currentMode == 1) ? L"Pinshift: 双拼模式" : L"Pinshift: 全拼模式");
+
+    if (!Shell_NotifyIconW(NIM_MODIFY, &nid)) {
+        Shell_NotifyIconW(NIM_ADD, &nid);
+    }
+}
+
+static void RemoveTrayIcon(void) {
+    if (!s_trayVisible) return;
+    NOTIFYICONDATAW nid = { sizeof(NOTIFYICONDATAW) };
+    nid.hWnd = s_hwnd;
+    nid.uID = 1;
+    Shell_NotifyIconW(NIM_DELETE, &nid);
+    s_trayVisible = false;
+}
+
+static bool IsAutoStartEnabled(void) {
     HKEY hKey;
     bool enabled = false;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_PATH_RUN, 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS) {
-        if (RegQueryValueExW(hKey, REG_VAL_RUN, NULL, NULL, NULL, NULL) == ERROR_SUCCESS) {
-            enabled = true;
-        }
+        enabled = (RegQueryValueExW(hKey, REG_VAL_RUN, NULL, NULL, NULL, NULL) == ERROR_SUCCESS);
         RegCloseKey(hKey);
     }
     return enabled;
 }
 
-void ToggleAutoStart(void) {
+static void ToggleAutoStart(void) {
     HKEY hKey;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_PATH_RUN, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
-        if (IsAutoStart()) {
+        if (IsAutoStartEnabled()) {
             RegDeleteValueW(hKey, REG_VAL_RUN);
         } else {
             wchar_t path[MAX_PATH + 2];
@@ -216,7 +180,7 @@ void ToggleAutoStart(void) {
     }
 }
 
-bool IsTrayHidden(void) {
+static bool IsTrayHiddenConfig(void) {
     HKEY hKey;
     DWORD val = 0;
     DWORD size = sizeof(val);
@@ -224,139 +188,73 @@ bool IsTrayHidden(void) {
         RegQueryValueExW(hKey, REG_VAL_HIDE_TRAY, NULL, NULL, (LPBYTE)&val, &size);
         RegCloseKey(hKey);
     }
-    return val == 1;
+    return (val == 1);
 }
 
-void SetTrayHidden(bool hide) {
+static void ToggleTrayVisibility(void) {
+    bool hide = !IsTrayHiddenConfig();
     HKEY hKey;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH_APP, 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
         DWORD val = hide ? 1 : 0;
         RegSetValueExW(hKey, REG_VAL_HIDE_TRAY, 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         RegCloseKey(hKey);
     }
-}
 
-void ToggleTrayVisibility(void) {
-    DWORD now = GetTickCount();
-    if (now - g_app.lastToggleHideTick < 500) return;
-    g_app.lastToggleHideTick = now;
-
-    bool hidden = !IsTrayHidden();
-    SetTrayHidden(hidden);
-
-    if (hidden) {
-        ShellNotify(NIM_DELETE);
-        g_app.isTrayVisible = false;
+    if (hide) {
+        RemoveTrayIcon();
     } else {
-        ShellNotify(NIM_ADD);
-        g_app.isTrayVisible = true;
+        s_trayVisible = true;
+        ReloadIconResources(QueryTaskbarIconMetric());
+        UpdateTrayIcon();
     }
 }
 
-void ShowTrayMenu(void) {
-    SetForegroundWindow(g_app.hwnd);
+static void ShowContextMenu(void) {
+    SetForegroundWindow(s_hwnd);
     HMENU hMenu = CreatePopupMenu();
 
-    DWORD mode = GetIMEMode();
-    UINT quanFlag = MF_STRING | ((mode == 0) ? MF_CHECKED : 0);
-    UINT shuangFlag = MF_STRING | ((mode == 1) ? MF_CHECKED : 0);
-    UINT autoFlag = MF_STRING | (IsAutoStart() ? MF_CHECKED : 0);
+    UINT quanFlag   = MF_STRING | ((s_currentMode == 0) ? MF_CHECKED : 0);
+    UINT shuangFlag = MF_STRING | ((s_currentMode == 1) ? MF_CHECKED : 0);
+    UINT autoFlag   = MF_STRING | (IsAutoStartEnabled() ? MF_CHECKED : 0);
 
-    AppendMenuW(hMenu, quanFlag, IDM_FULL_PINYIN, L"全拼输入");
+    AppendMenuW(hMenu, quanFlag,   IDM_FULL_PINYIN,   L"全拼输入");
     AppendMenuW(hMenu, shuangFlag, IDM_DOUBLE_PINYIN, L"双拼输入");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(hMenu, autoFlag, IDM_AUTO_START, L"开机启动");
+    AppendMenuW(hMenu, autoFlag,   IDM_AUTO_START,    L"开机启动");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(hMenu, MF_STRING, IDM_HELP, L"快捷键说明");
-    AppendMenuW(hMenu, MF_STRING, IDM_EXIT, L"退出程序");
+    AppendMenuW(hMenu, MF_STRING,  IDM_HELP,          L"快捷键说明");
+    AppendMenuW(hMenu, MF_STRING,  IDM_EXIT,          L"退出程序");
 
     POINT pt;
     GetCursorPos(&pt);
-    TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_app.hwnd, NULL);
-    PostMessageW(g_app.hwnd, WM_NULL, 0, 0);
+    TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, s_hwnd, NULL);
+    PostMessageW(s_hwnd, WM_NULL, 0, 0);
     DestroyMenu(hMenu);
 }
 
-DWORD WINAPI WatchRegistryThread(LPVOID param) {
-    (void)param;
-    HKEY hKey;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH_INPUT, 0, NULL, 0, KEY_NOTIFY | KEY_QUERY_VALUE, NULL, &hKey, NULL) != ERROR_SUCCESS) {
-        return 0;
-    }
-
-    HANDLE hNotifyEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
-    HANDLE handles[2] = { hNotifyEvent, g_app.hStopEvent };
-
-    #define REG_NOTIFY_THREAD_AGNOSTIC 0x10000000
-    DWORD filter = REG_NOTIFY_CHANGE_LAST_SET | REG_NOTIFY_THREAD_AGNOSTIC;
-    if (RegNotifyChangeKeyValue(hKey, FALSE, filter, hNotifyEvent, TRUE) != ERROR_SUCCESS) {
-        filter &= ~REG_NOTIFY_THREAD_AGNOSTIC;
-        RegNotifyChangeKeyValue(hKey, FALSE, filter, hNotifyEvent, TRUE);
-    }
-
-    DWORD lastMode = GetIMEMode();
-    DWORD waitTimeout = INFINITE;
-    bool hasPendingUpdate = false;
-
-    while (true) {
-        DWORD event = WaitForMultipleObjects(2, handles, FALSE, waitTimeout);
-        if (event == WAIT_OBJECT_0 + 1) break;
-
-        if (event == WAIT_OBJECT_0) {
-            RegNotifyChangeKeyValue(hKey, FALSE, filter, hNotifyEvent, TRUE);
-            waitTimeout = 150;
-            hasPendingUpdate = true;
-        } else if (event == WAIT_TIMEOUT) {
-            waitTimeout = INFINITE;
-            if (hasPendingUpdate) {
-                hasPendingUpdate = false;
-                DWORD currentMode = GetIMEMode();
-                if (currentMode != lastMode) {
-                    lastMode = currentMode;
-                    PostMessageW(g_app.hwnd, WM_USER_SYNC_UI, 0, 0);
-                }
-            }
-        }
-    }
-
-    CloseHandle(hNotifyEvent);
-    RegCloseKey(hKey);
-    return 0;
-}
-
-LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    static UINT s_taskbarCreatedMsg = 0;
-
-    if (msg == s_taskbarCreatedMsg && s_taskbarCreatedMsg != 0) {
-        if (!IsTrayHidden()) {
-            ReloadIcons(GetTaskbarSmallIconSize());
-            ShellNotify(NIM_ADD);
+static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == s_msgTaskbarCreated && s_msgTaskbarCreated != 0) {
+        if (!IsTrayHiddenConfig()) {
+            s_trayVisible = true;
+            ReloadIconResources(QueryTaskbarIconMetric());
+            UpdateTrayIcon();
         }
         return 0;
     }
 
     switch (msg) {
     case WM_CREATE:
-        s_taskbarCreatedMsg = RegisterWindowMessageW(L"TaskbarCreated");
+        s_msgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
         return 0;
 
-    case WM_TIMER:
-        if (wParam == TIMER_DPI_PROBE_ID && g_app.isTrayVisible) {
-            int newSize = GetTaskbarSmallIconSize();
-            if (newSize != g_app.currentIconSize) {
-                ReloadIcons(newSize);
-                ShellNotify(NIM_MODIFY);
-            }
-        }
-        return 0;
-
+    case WM_DPICHANGED:
     case WM_DISPLAYCHANGE:
     case WM_SETTINGCHANGE:
-        if (g_app.isTrayVisible) {
-            int newSize = GetTaskbarSmallIconSize();
-            if (newSize != g_app.currentIconSize) {
-                ReloadIcons(newSize);
-                ShellNotify(NIM_MODIFY);
+        if (s_trayVisible) {
+            int newSize = QueryTaskbarIconMetric();
+            if (newSize != s_iconSize) {
+                ReloadIconResources(newSize);
+                UpdateTrayIcon();
             }
         }
         return 0;
@@ -366,24 +264,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         else if (wParam == HOTKEY_TOGGLE_HIDE) ToggleTrayVisibility();
         return 0;
 
-    case WM_USER_SYNC_UI:
-        if (g_app.isTrayVisible) ShellNotify(NIM_MODIFY);
-        return 0;
-
-    case WM_USER_TOGGLE_MODE:
-        ToggleIMEMode();
-        return 0;
-
-    case WM_USER_TOGGLE_HIDE:
-        ToggleTrayVisibility();
-        return 0;
-
     case WM_TRAYICON:
-        if (lParam == WM_LBUTTONUP) {
-            ToggleIMEMode();
-        } else if (lParam == WM_RBUTTONUP) {
-            ShowTrayMenu();
-        }
+        if (lParam == WM_LBUTTONUP) ToggleIMEMode();
+        else if (lParam == WM_RBUTTONUP) ShowContextMenu();
         return 0;
 
     case WM_COMMAND:
@@ -392,36 +275,25 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case IDM_DOUBLE_PINYIN: SetIMEMode(1); break;
         case IDM_AUTO_START:    ToggleAutoStart(); break;
         case IDM_HELP:
-            MessageBoxW(
-                hwnd,
+            MessageBoxW(hwnd,
                 L"【快捷键说明】\n\n"
                 L"Shift+Ctrl+Y：切换全拼/双拼\n"
                 L"Shift+Ctrl+Win+Y：显示/隐藏托盘图标\n"
                 L"Shift+双击程序：显示/隐藏托盘图标",
-                L"Pinshift", MB_OK | MB_ICONINFORMATION
-            );
+                L"Pinshift", MB_OK | MB_ICONINFORMATION);
             break;
         case IDM_EXIT:
-            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            DestroyWindow(hwnd);
             break;
         }
         return 0;
 
-    case WM_CLOSE:
-        KillTimer(hwnd, TIMER_DPI_PROBE_ID);
+    case WM_DESTROY:
         UnregisterHotKey(hwnd, HOTKEY_TOGGLE_MODE);
         UnregisterHotKey(hwnd, HOTKEY_TOGGLE_HIDE);
-        if (g_app.isTrayVisible) ShellNotify(NIM_DELETE);
-
-        SetEvent(g_app.hStopEvent);
-        WaitForSingleObject(g_app.hRegThread, 1000);
-        CloseHandle(g_app.hRegThread);
-        CloseHandle(g_app.hStopEvent);
-
-        if (g_app.hIconQuan) DestroyIcon(g_app.hIconQuan);
-        if (g_app.hIconShuang) DestroyIcon(g_app.hIconShuang);
-
-        DestroyWindow(hwnd);
+        RemoveTrayIcon();
+        if (s_iconQuan) DestroyIcon(s_iconQuan);
+        if (s_iconShuang) DestroyIcon(s_iconShuang);
         PostQuitMessage(0);
         return 0;
     }
@@ -429,65 +301,87 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    (void)hPrevInstance;
-    (void)lpCmdLine;
-    (void)nCmdShow;
+    (void)hPrevInstance; (void)lpCmdLine; (void)nCmdShow;
 
-    HANDLE hMutex = CreateMutexW(NULL, FALSE, g_mutexName);
+    HMODULE hUser = GetModuleHandleW(L"user32.dll");
+    if (hUser) {
+        typedef BOOL (WINAPI *SetDpiAwarenessProc)(DPI_AWARENESS_CONTEXT);
+        SetDpiAwarenessProc setDpi = (SetDpiAwarenessProc)GetProcAddress(hUser, "SetProcessDpiAwarenessContext");
+        if (setDpi) setDpi(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+
+    HANDLE hMutex = CreateMutexW(NULL, FALSE, MUTEX_NAME);
     if (!hMutex || GetLastError() == ERROR_ALREADY_EXISTS) {
-        HWND oldHwnd = FindWindowW(g_className, NULL);
+        HWND oldHwnd = FindWindowW(CLASS_NAME, NULL);
         if (oldHwnd) {
             if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
-                PostMessageW(oldHwnd, WM_USER_TOGGLE_HIDE, 0, 0);
+                PostMessageW(oldHwnd, WM_HOTKEY, HOTKEY_TOGGLE_HIDE, 0);
             } else {
-                PostMessageW(oldHwnd, WM_USER_TOGGLE_MODE, 0, 0);
+                PostMessageW(oldHwnd, WM_HOTKEY, HOTKEY_TOGGLE_MODE, 0);
             }
         }
         if (hMutex) CloseHandle(hMutex);
         return 0;
     }
 
-    WNDCLASSEXW wc = {0};
-    wc.cbSize = sizeof(WNDCLASSEXW);
+    WNDCLASSEXW wc = { sizeof(WNDCLASSEXW) };
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
-    wc.lpszClassName = g_className;
+    wc.lpszClassName = CLASS_NAME;
     wc.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON));
-    wc.hIconSm = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, 
+    wc.hIconSm = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON,
                                   GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
     RegisterClassExW(&wc);
 
-    g_app.hwnd = CreateWindowExW(
-        0, g_className, L"PinshiftHotkey",
-        0, 0, 0, 0, 0,
-        NULL, NULL, hInstance, NULL
-    );
-
-    if (!g_app.hwnd) {
+    s_hwnd = CreateWindowExW(0, CLASS_NAME, L"Pinshift", 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
+    if (!s_hwnd) {
         CloseHandle(hMutex);
         return 0;
     }
 
-    g_app.hStopEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
-    g_app.hRegThread = CreateThread(NULL, 0, WatchRegistryThread, NULL, 0, NULL);
+    RegisterHotKey(s_hwnd, HOTKEY_TOGGLE_MODE, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'Y');
+    RegisterHotKey(s_hwnd, HOTKEY_TOGGLE_HIDE, MOD_CONTROL | MOD_SHIFT | MOD_WIN | MOD_NOREPEAT, 'Y');
 
-    RegisterHotKey(g_app.hwnd, HOTKEY_TOGGLE_MODE, MOD_CONTROL | MOD_SHIFT, 'Y');
-    RegisterHotKey(g_app.hwnd, HOTKEY_TOGGLE_HIDE, MOD_CONTROL | MOD_SHIFT | MOD_WIN, 'Y');
+    HKEY hRegKey = NULL;
+    HANDLE hRegEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_PATH_INPUT, 0, NULL, 0, KEY_NOTIFY | KEY_QUERY_VALUE, NULL, &hRegKey, NULL) == ERROR_SUCCESS) {
+        RegNotifyChangeKeyValue(hRegKey, FALSE, REG_NOTIFY_CHANGE_LAST_SET | REG_NOTIFY_THREAD_AGNOSTIC, hRegEvent, TRUE);
+    }
 
-    SetTimer(g_app.hwnd, TIMER_DPI_PROBE_ID, 1500, NULL);
-
-    ReloadIcons(GetTaskbarSmallIconSize());
-    if (!IsTrayHidden()) {
-        g_app.isTrayVisible = true;
-        ShellNotify(NIM_ADD);
+    s_currentMode = GetIMEMode();
+    if (!IsTrayHiddenConfig()) {
+        s_trayVisible = true;
+        ReloadIconResources(QueryTaskbarIconMetric());
+        UpdateTrayIcon();
     }
 
     MSG msg;
-    while (GetMessageW(&msg, NULL, 0, 0) > 0) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
+    bool running = true;
+    while (running) {
+        DWORD waitResult = MsgWaitForMultipleObjectsEx(1, &hRegEvent, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+
+        if (waitResult == WAIT_OBJECT_0) {
+            RegNotifyChangeKeyValue(hRegKey, FALSE, REG_NOTIFY_CHANGE_LAST_SET | REG_NOTIFY_THREAD_AGNOSTIC, hRegEvent, TRUE);
+            DWORD newMode = GetIMEMode();
+            if (newMode != s_currentMode) {
+                s_currentMode = newMode;
+                UpdateTrayIcon();
+            }
+        } else {
+            while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+                if (msg.message == WM_QUIT) {
+                    running = false;
+                    break;
+                }
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
     }
 
+    if (hRegKey) RegCloseKey(hRegKey);
+    if (hRegEvent) CloseHandle(hRegEvent);
     CloseHandle(hMutex);
+
     return (int)msg.wParam;
 }
