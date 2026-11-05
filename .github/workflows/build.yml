@@ -1,0 +1,43 @@
+name: Build Pinshift C
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-w64-mingw32
+            artifact: pinshift-x64.exe
+          - arch: i686
+            target: i686-w64-mingw32
+            artifact: pinshift-x86.exe
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install MinGW Cross Compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64 binutils-mingw-w64
+
+      - name: Compile Resource & Binary
+        run: |
+          ${{ matrix.target }}-windres -i resource.rc -o resource.o
+          ${{ matrix.target }}-gcc -O3 -s -mwindows -DUNICODE -D_UNICODE \
+            main.c resource.o -o ${{ matrix.artifact }} \
+            -lkernel32 -luser32 -lshell32 -ladvapi32 -lgdi32
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
