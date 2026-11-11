@@ -80,10 +80,23 @@ static DWORD GetIMEMode(void) {
 
 static void NotifyActiveWindowIME(void) {
     HWND fg = GetForegroundWindow();
-    HWND hTray = FindWindowW(L"Shell_TrayWnd", NULL);
     DWORD_PTR result = 0;
 
-    if (fg && fg != s_hwnd && fg != hTray) {
+    DWORD shellPid = 0;
+    HWND hShell = GetShellWindow();
+    if (hShell) {
+        GetWindowThreadProcessId(hShell, &shellPid);
+    } else {
+        HWND hTray = FindWindowW(L"Shell_TrayWnd", NULL);
+        if (hTray) GetWindowThreadProcessId(hTray, &shellPid);
+    }
+
+    DWORD fgPid = 0;
+    if (fg) {
+        GetWindowThreadProcessId(fg, &fgPid);
+    }
+	
+    if (fg && fg != s_hwnd && fgPid != 0 && fgPid != shellPid) {
         SendMessageTimeoutW(
             fg, WM_SETTINGCHANGE, 0,
             (LPARAM)L"Control Panel\\Input Method",
